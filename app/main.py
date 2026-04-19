@@ -40,13 +40,25 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_origins_list,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # CORS: we echo the request's origin (via regex) instead of returning
+    # the literal "*" so that credentialed requests (cookies, authorization
+    # headers) are allowed by the browser. Browsers reject
+    # `Access-Control-Allow-Origin: *` whenever the request has
+    # `credentials: 'include'`. Starlette honors `allow_origin_regex` and
+    # writes back the matching origin per-request, which is the shape
+    # browsers actually accept.
+    origins_list = settings.cors_origins_list
+    wildcard = not origins_list or "*" in origins_list
+    kwargs = {
+        "allow_credentials": True,
+        "allow_methods": ["*"],
+        "allow_headers": ["*"],
+    }
+    if wildcard:
+        kwargs["allow_origin_regex"] = ".*"
+    else:
+        kwargs["allow_origins"] = origins_list
+    app.add_middleware(CORSMiddleware, **kwargs)
 
     app.include_router(health_routes.router)
     app.include_router(auth_routes.router)

@@ -31,6 +31,9 @@ from app.deps import (
     require_owner_or_approver,
 )
 from app.models import (
+    Artifact,
+    ArtifactApproval,
+    BrandCheckDecision,
     CampaignPlan,
     MarketingProject,
     ProjectSource,
@@ -38,6 +41,7 @@ from app.models import (
     Run,
     RunPhase,
     RunStatus,
+    Step,
     User,
 )
 
@@ -501,6 +505,95 @@ class ProjectRunOut(BaseModel):
     ended_at: datetime | None = None
     total_cost_usd: float
     error: str | None = None
+
+
+class ResetProjectOut(BaseModel):
+    project_id: UUID
+    state: str
+    deleted_artifacts: int
+    deleted_runs: int
+    plan_cleared: bool
+
+
+@router.post("/{project_id}/reset", response_model=ResetProjectOut)
+def reset_project(
+    project_id: UUID,
+    session: Session = Depends(get_session),
+    ws: CurrentWorkspace = Depends(require_owner_or_approver),
+) -> ResetProjectOut:
+    """Wipe a project back to a fresh intake state.
+
+    Deletes every campaign plan, run, step, artifact, brand-check, and
+    approval attached to the project so the full planning → producing
+    → approving → shipped loop can be demoed again.
+    """
+    project = session.get(MarketingProject, project_id)
+    if project is None or project.workspace_id != ws.id:
+        raise HTTPException(status_code=404, detail="project not found")
+
+    artifacts = session.exec(
+        select(Artifact).where(Artifact.project_id == project.id)
+    ).all()
+    artifact_ids = [a.id for a in artifacts]
+
+    if artifact_ids:
+        approvals = session.exec(
+            select(ArtifactApproval).where(
+                ArtifactApproval.artifact_id.in_(artifact_ids)
+            )
+        ).all()
+        for ap in approvals:
+            session.delete(ap)
+
+    runs = session.exec(select(Run).where(Run.project_id == project.id)).all()
+    run_ids = [r.id for r in runs]
+
+    if run_ids:
+        brand_checks = session.exec(
+            select(BrandCheckDecision).where(
+                BrandCheckDecision.run_id.in_(run_ids)
+            )
+        ).all()
+        for bc in brand_checks:
+            session.delete(bc)
+
+        steps = session.exec(select(Step).where(Step.run_id.in_(run_ids))).all()
+        for s in steps:
+            session.delete(s)
+
+    for a in artifacts:
+        session.delete(a)
+
+    plans = session.exec(
+        select(CampaignPlan).where(CampaignPlan.project_id == project.id)
+    ).all()
+    for p in plans:
+        session.delete(p)
+
+    for r in runs:
+        session.delete(r)
+
+    project.state = ProjectState.intake.value
+    project.updated_at = datetime.now(tz=timezone.utc)
+    session.add(project)
+    session.commit()
+    session.refresh(project)
+
+    logger.info(
+        "reset project %s: deleted %d artifacts, %d runs, %d plans",
+        project.id,
+        len(artifacts),
+        len(runs),
+        len(plans),
+    )
+
+    return ResetProjectOut(
+        project_id=project.id,
+        state=project.state,
+        deleted_artifacts=len(artifacts),
+        deleted_runs=len(runs),
+        plan_cleared=bool(plans),
+    )
 
 
 @router.get("/{project_id}/runs", response_model=list[ProjectRunOut])

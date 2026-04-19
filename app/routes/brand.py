@@ -33,7 +33,9 @@ class BrandKitOut(BaseModel):
     legal_footer: str
     positioning: str
     target_icp: str
-    voice_samples: list[dict[str, Any]]
+    # Accept either plain strings (short quotable samples) or dicts with
+    # richer metadata like {"text": "...", "context": "...", "channel": "..."}.
+    voice_samples: list[Any]
     created_at: datetime
 
 
@@ -97,7 +99,7 @@ class BrandKitIn(BaseModel):
     legal_footer: str | None = None
     positioning: str | None = None
     target_icp: str | None = None
-    voice_samples: list[dict[str, Any]] | None = None
+    voice_samples: list[Any] | None = None
 
 
 @router.post("", response_model=BrandKitOut, status_code=201)

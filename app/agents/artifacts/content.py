@@ -63,7 +63,7 @@ class BlogGenerator(_Base):
         title="Launch blog post (GEO-optimized)",
         description="Long-form launch blog structured for AI retrieval (GEO) and social sharing.",
     )
-    anthropic_max_tokens = 2800
+    anthropic_max_tokens = 3600
     anthropic_thinking_budget = 0
     anthropic_schema = (
         "{\n"

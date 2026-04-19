@@ -207,19 +207,97 @@ def _competitor_block(ctx: GenContext) -> str:
 
 
 def _extract_json(text: str) -> dict | None:
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.lower().startswith("json"):
-            text = text[4:].lstrip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
+    """Best-effort recovery of a JSON object from a Claude response.
+
+    Handles three failure modes observed in production:
+      1. Claude wraps output in ```json ... ``` fences despite the
+         "no fences" instruction.
+      2. Output is truncated at max_tokens mid-object (missing closing
+         braces/brackets).
+      3. Trailing prose after a valid JSON object.
+    """
+    if not text:
         return None
+    s = text.strip()
+
+    # Strip a leading markdown fence of any flavor (```json, ```JSON, ``` ).
+    if s.startswith("```"):
+        nl = s.find("\n")
+        if nl != -1:
+            s = s[nl + 1 :]
+    # Strip trailing fence if present.
+    if s.rstrip().endswith("```"):
+        s = s.rstrip()[: -3].rstrip()
+
+    start = s.find("{")
+    if start == -1:
+        return None
+    s = s[start:]
+
+    # Fast path: full object parse.
     try:
-        return json.loads(text[start : end + 1])
+        return json.loads(s)
     except json.JSONDecodeError:
-        return None
+        pass
+
+    # Fallback 1: largest-prefix valid parse via raw_decode.
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(s)
+        if isinstance(obj, dict):
+            return obj
+    except json.JSONDecodeError:
+        pass
+
+    # Fallback 2: truncation recovery. Walk the string tracking brace /
+    # bracket / string state. If we hit EOF mid-object, append the
+    # minimum number of closers to balance and retry.
+    stack: list[str] = []
+    in_string = False
+    escape = False
+    last_value_end = -1
+    for i, ch in enumerate(s):
+        if escape:
+            escape = False
+            continue
+        if in_string:
+            if ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+                last_value_end = i
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+            last_value_end = i
+        elif ch in "0123456789tfn" and not stack:
+            break
+        elif ch in ",}]":
+            last_value_end = i
+
+    if last_value_end > 0 and stack:
+        # Trim to last complete value, drop any dangling trailing comma,
+        # then append closers.
+        trimmed = s[: last_value_end + 1].rstrip()
+        if trimmed.endswith(","):
+            trimmed = trimmed[:-1]
+        # Close any open string first.
+        if in_string:
+            trimmed += '"'
+        closers = "".join(reversed(stack))
+        candidate = trimmed + closers
+        try:
+            obj = json.loads(candidate)
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+
+    return None
 
 
 async def generate_via_claude(
@@ -291,11 +369,18 @@ async def generate_via_claude(
         f"object defined in the schema. No prose, no fences."
     )
 
+    # Assistant-prefill with `{` forces Claude to continue the JSON object
+    # from character 0 — the most reliable way to suppress markdown fences
+    # and preamble without spending a retry. We re-add the leading `{`
+    # when parsing.
     kwargs: dict[str, Any] = {
         "model": ARTIFACT_MODEL,
         "max_tokens": max_tokens,
         "system": system_prompt,
-        "messages": [{"role": "user", "content": user_prompt}],
+        "messages": [
+            {"role": "user", "content": user_prompt},
+            {"role": "assistant", "content": "{"},
+        ],
     }
     if thinking_budget and thinking_budget > 0:
         # Extended thinking forces Claude to deliberate before speaking.
@@ -306,6 +391,8 @@ async def generate_via_claude(
     # Stream chunks back into the run's SSE bus so the frontend can render
     # the model "typing" live — matches the UX expected from modern agentic
     # apps. Falls back to non-streaming if the stream API is unavailable.
+    # NOTE: we prefill the assistant turn with "{" so the text we collect
+    # is the *continuation* — we add the `{` back before parsing.
     text = ""
     run_id = getattr(ctx, "run_id", None)
     step_id = getattr(ctx, "step_id", None)
@@ -372,13 +459,16 @@ async def generate_via_claude(
             if getattr(block, "type", None) == "text":
                 text += block.text
 
-    parsed = _extract_json(text)
+    # We prefilled the assistant turn with "{" so the continuation is
+    # everything after the opening brace. Re-add it before parsing.
+    full_text = text if text.lstrip().startswith("{") else "{" + text
+    parsed = _extract_json(full_text)
     if parsed is None:
         logger.warning(
             "artifact %s: claude returned non-JSON (len=%d, preview=%r)",
             artifact_type,
-            len(text),
-            text[:240],
+            len(full_text),
+            full_text[:240],
         )
         raise RuntimeError(f"claude did not return JSON for artifact {artifact_type}")
 

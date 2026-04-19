@@ -574,7 +574,6 @@ def reset_project(
         session.delete(r)
 
     project.state = ProjectState.intake.value
-    project.updated_at = datetime.now(tz=timezone.utc)
     session.add(project)
     session.commit()
     session.refresh(project)

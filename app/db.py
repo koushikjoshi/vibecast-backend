@@ -38,6 +38,10 @@ def init_db() -> None:
         conn.exec_driver_sql("PRAGMA busy_timeout=5000;")
 
 
+def get_engine():
+    return engine
+
+
 def get_session() -> Generator[Session, None, None]:
     with Session(engine) as session:
         yield session

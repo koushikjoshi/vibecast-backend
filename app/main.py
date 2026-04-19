@@ -13,6 +13,7 @@ from app.routes import brand as brand_routes
 from app.routes import competitors as competitors_routes
 from app.routes import health as health_routes
 from app.routes import projects as projects_routes
+from app.routes import runs as run_routes
 from app.routes import workspaces as workspace_routes
 
 logger = logging.getLogger("vibecast")
@@ -52,6 +53,7 @@ def create_app() -> FastAPI:
     app.include_router(brand_routes.router)
     app.include_router(competitors_routes.router)
     app.include_router(projects_routes.router)
+    app.include_router(run_routes.router)
 
     return app
 

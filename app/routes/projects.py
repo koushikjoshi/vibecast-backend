@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     File,
     Form,
@@ -19,6 +20,7 @@ from fastapi import (
 from pydantic import BaseModel, HttpUrl
 from sqlmodel import Session, select
 
+from app.agents.runtime import create_run, run_planning
 from app.config import Settings, get_settings
 from app.db import get_session
 from app.deps import (
@@ -26,11 +28,16 @@ from app.deps import (
     get_current_user,
     get_current_workspace,
     require_operator_or_above,
+    require_owner_or_approver,
 )
 from app.models import (
+    CampaignPlan,
     MarketingProject,
     ProjectSource,
     ProjectState,
+    Run,
+    RunPhase,
+    RunStatus,
     User,
 )
 
@@ -349,3 +356,176 @@ def add_url_source(
     session.commit()
     session.refresh(src)
     return _serialize_source(src)
+
+
+# ---------------------------------------------------------------------------
+# Planning
+# ---------------------------------------------------------------------------
+
+
+class CampaignPlanOut(BaseModel):
+    id: UUID
+    project_id: UUID
+    version: int
+    positioning: str
+    pillars: list[dict[str, Any]]
+    audience_refinement: str
+    channel_selection: list[dict[str, Any]]
+    competitor_angle: str
+    urgency_framing: str
+    approved_by: UUID | None = None
+    approved_at: datetime | None = None
+    created_at: datetime
+
+
+class RunKickoffOut(BaseModel):
+    run_id: UUID
+    project_id: UUID
+    status: str
+
+
+def _serialize_plan(plan: CampaignPlan) -> CampaignPlanOut:
+    try:
+        pillars = json.loads(plan.pillars_json or "[]")
+    except json.JSONDecodeError:
+        pillars = []
+    try:
+        channels = json.loads(plan.channel_selection_json or "[]")
+    except json.JSONDecodeError:
+        channels = []
+    return CampaignPlanOut(
+        id=plan.id,
+        project_id=plan.project_id,
+        version=plan.version,
+        positioning=plan.positioning,
+        pillars=pillars,
+        audience_refinement=plan.audience_refinement,
+        channel_selection=channels,
+        competitor_angle=plan.competitor_angle,
+        urgency_framing=plan.urgency_framing,
+        approved_by=plan.approved_by,
+        approved_at=plan.approved_at,
+        created_at=plan.created_at,
+    )
+
+
+@router.post("/{project_id}/plan", response_model=RunKickoffOut, status_code=202)
+def kickoff_planning(
+    project_id: UUID,
+    background: BackgroundTasks,
+    session: Session = Depends(get_session),
+    ws: CurrentWorkspace = Depends(require_operator_or_above),
+) -> RunKickoffOut:
+    project = session.get(MarketingProject, project_id)
+    if project is None or project.workspace_id != ws.id:
+        raise HTTPException(status_code=404, detail="project not found")
+
+    existing = session.exec(
+        select(Run)
+        .where(
+            Run.project_id == project.id,
+            Run.phase == RunPhase.planning.value,
+            Run.status == RunStatus.running.value,
+        )
+    ).first()
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="planning run already in progress")
+
+    if project.state not in {
+        ProjectState.intake.value,
+        ProjectState.planning.value,
+        ProjectState.plan_ready.value,
+    }:
+        raise HTTPException(
+            status_code=400,
+            detail=f"cannot start planning from state '{project.state}'",
+        )
+
+    run = create_run(session, project)
+    background.add_task(run_planning, run.id, project.id, ws.id)
+    return RunKickoffOut(run_id=run.id, project_id=project.id, status=run.status)
+
+
+@router.get("/{project_id}/plan", response_model=CampaignPlanOut | None)
+def get_latest_plan(
+    project_id: UUID,
+    session: Session = Depends(get_session),
+    ws: CurrentWorkspace = Depends(get_current_workspace),
+) -> CampaignPlanOut | None:
+    project = session.get(MarketingProject, project_id)
+    if project is None or project.workspace_id != ws.id:
+        raise HTTPException(status_code=404, detail="project not found")
+    plan = session.exec(
+        select(CampaignPlan)
+        .where(CampaignPlan.project_id == project.id)
+        .order_by(CampaignPlan.version.desc())
+    ).first()
+    if plan is None:
+        return None
+    return _serialize_plan(plan)
+
+
+@router.post("/{project_id}/plan/approve", response_model=CampaignPlanOut)
+def approve_plan(
+    project_id: UUID,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+    ws: CurrentWorkspace = Depends(require_owner_or_approver),
+) -> CampaignPlanOut:
+    project = session.get(MarketingProject, project_id)
+    if project is None or project.workspace_id != ws.id:
+        raise HTTPException(status_code=404, detail="project not found")
+    plan = session.exec(
+        select(CampaignPlan)
+        .where(CampaignPlan.project_id == project.id)
+        .order_by(CampaignPlan.version.desc())
+    ).first()
+    if plan is None:
+        raise HTTPException(status_code=404, detail="no campaign plan to approve")
+    plan.approved_by = user.id
+    plan.approved_at = datetime.now(tz=timezone.utc)
+    session.add(plan)
+
+    project.state = ProjectState.producing.value
+    session.add(project)
+    session.commit()
+    session.refresh(plan)
+    return _serialize_plan(plan)
+
+
+class ProjectRunOut(BaseModel):
+    id: UUID
+    phase: str
+    status: str
+    started_at: datetime
+    ended_at: datetime | None = None
+    total_cost_usd: float
+    error: str | None = None
+
+
+@router.get("/{project_id}/runs", response_model=list[ProjectRunOut])
+def list_project_runs(
+    project_id: UUID,
+    session: Session = Depends(get_session),
+    ws: CurrentWorkspace = Depends(get_current_workspace),
+) -> list[ProjectRunOut]:
+    project = session.get(MarketingProject, project_id)
+    if project is None or project.workspace_id != ws.id:
+        raise HTTPException(status_code=404, detail="project not found")
+    runs = session.exec(
+        select(Run)
+        .where(Run.project_id == project.id)
+        .order_by(Run.started_at.desc())
+    ).all()
+    return [
+        ProjectRunOut(
+            id=r.id,
+            phase=r.phase,
+            status=r.status,
+            started_at=r.started_at,
+            ended_at=r.ended_at,
+            total_cost_usd=r.total_cost_usd,
+            error=r.error,
+        )
+        for r in runs
+    ]

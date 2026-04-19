@@ -24,6 +24,22 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _as_utc(dt: datetime | None) -> datetime | None:
+    """Coerce naive datetimes (as returned by SQLite) to UTC-aware.
+
+    SQLite does not preserve tzinfo across writes/reads, so a field that
+    was written as tz-aware comes back naive after `session.refresh()`.
+    Subtracting an aware and a naive datetime raises TypeError. This
+    helper normalizes any value we read back to UTC-aware.
+    """
+
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def publish(run_id: UUID, event: StepEvent | dict) -> None:
     payload = event.model_dump(mode="json") if isinstance(event, StepEvent) else event
     _history.setdefault(run_id, []).append(payload)
@@ -117,8 +133,10 @@ class StepTracker:
         step.tokens_out = tokens_out
         step.cost_usd = cost_usd
         step.ended_at = _now()
-        if step.started_at:
-            delta = step.ended_at - step.started_at
+        started = _as_utc(step.started_at)
+        ended = _as_utc(step.ended_at)
+        if started and ended:
+            delta = ended - started
             step.duration_ms = int(delta.total_seconds() * 1000)
         self.session.add(step)
         self.session.commit()
@@ -143,8 +161,10 @@ class StepTracker:
         step.status = StepStatus.error.value
         step.output_json = json.dumps({"error": error})
         step.ended_at = _now()
-        if step.started_at:
-            delta = step.ended_at - step.started_at
+        started = _as_utc(step.started_at)
+        ended = _as_utc(step.ended_at)
+        if started and ended:
+            delta = ended - started
             step.duration_ms = int(delta.total_seconds() * 1000)
         self.session.add(step)
         self.session.commit()

@@ -9,7 +9,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.db import init_db
 from app.routes import auth as auth_routes
+from app.routes import brand as brand_routes
+from app.routes import competitors as competitors_routes
 from app.routes import health as health_routes
+from app.routes import projects as projects_routes
 from app.routes import workspaces as workspace_routes
 
 logger = logging.getLogger("vibecast")
@@ -46,6 +49,9 @@ def create_app() -> FastAPI:
     app.include_router(health_routes.router)
     app.include_router(auth_routes.router)
     app.include_router(workspace_routes.router)
+    app.include_router(brand_routes.router)
+    app.include_router(competitors_routes.router)
+    app.include_router(projects_routes.router)
 
     return app
 

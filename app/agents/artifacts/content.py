@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from app.agents.artifacts.base import ArtifactSpec, GenContext
+import logging
+from typing import ClassVar
+
+from app.agents.artifacts._anthropic import generate_via_claude
 from app.agents.artifacts._helpers import (
     brand_positioning,
     brand_voice,
@@ -10,16 +13,42 @@ from app.agents.artifacts._helpers import (
     plan_pillars,
     target_competitor,
 )
+from app.agents.artifacts.base import ArtifactSpec, GenContext
 from app.models import ArtifactStudio, ArtifactType
+
+logger = logging.getLogger("vibecast.artifacts.content")
 
 
 class _Base:
     spec: ArtifactSpec
+    anthropic_schema: ClassVar[str] = ""
+    anthropic_instructions: ClassVar[str] = ""
+    anthropic_max_tokens: ClassVar[int] = 2500
 
     async def generate_anthropic(self, ctx: GenContext) -> dict:
-        # Thin wrapper: real-LLM generation falls back to mock until the
-        # per-artifact Anthropic prompts are wired in a follow-up.
-        return await self.generate_mock(ctx)
+        if not self.anthropic_schema:
+            logger.info(
+                "artifact %s has no anthropic_schema; using mock output",
+                self.spec.type,
+            )
+            return await self.generate_mock(ctx)
+        try:
+            return await generate_via_claude(
+                ctx,
+                artifact_type=self.spec.type,
+                studio=self.spec.studio,
+                title=self.spec.title,
+                anthropic_schema=self.anthropic_schema,
+                anthropic_instructions=self.anthropic_instructions,
+                max_tokens=self.anthropic_max_tokens,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "claude generation failed for %s (%s); falling back to mock",
+                self.spec.type,
+                exc,
+            )
+            return await self.generate_mock(ctx)
 
 
 class BlogGenerator(_Base):
@@ -28,6 +57,30 @@ class BlogGenerator(_Base):
         studio=ArtifactStudio.content.value,
         title="Launch blog post (GEO-optimized)",
         description="Long-form launch blog structured for AI retrieval (GEO) and social sharing.",
+    )
+    anthropic_max_tokens = 3200
+    anthropic_schema = (
+        "{\n"
+        '  "headline": string (SEO title, 60-80 chars),\n'
+        '  "subhead": string (dek, 120-180 chars),\n'
+        '  "tldr": array of 3-5 string bullets for AI-retrieval summary,\n'
+        '  "sections": array of {"heading": string, "body": string} with 5-7 items,\n'
+        '  "faq": array of {"q": string, "a": string} with 3-5 items,\n'
+        '  "cta": {"label": string, "href": string},\n'
+        '  "geo_schema": {"@context": "https://schema.org", "@type": "Article", "headline": string, "description": string, "datePublished": string ISO date, "about": string},\n'
+        '  "voice_note": string (one line summarizing tone choices made)\n'
+        "}"
+    )
+    anthropic_instructions = (
+        "Write a long-form launch blog post optimized for Generative Engine "
+        "Optimization (GEO) — which means: lead with a crisp TL;DR, use "
+        "scannable section headings that match likely AI retrieval queries, "
+        "and include a FAQ section with literal question phrasings. Each "
+        "section body should be 80-160 words, concrete, and cite evidence "
+        "from the source material instead of abstract claims. Avoid hype "
+        "language. Avoid filler transitions. The post should read like a "
+        "credible launch announcement from a senior PMM, not a generic AI "
+        "output."
     )
 
     async def generate_mock(self, ctx: GenContext) -> dict:
@@ -144,6 +197,26 @@ class PressReleaseGenerator(_Base):
         title="Press release",
         description="AP-style press release for launch day.",
     )
+    anthropic_max_tokens = 1800
+    anthropic_schema = (
+        "{\n"
+        '  "dateline": string (CITY, DATE format),\n'
+        '  "headline": string (press-release style, 70-90 chars),\n'
+        '  "body_paragraphs": array of 4-6 strings (300-500 chars each),\n'
+        '  "quote": string (a realistic-sounding quote from a named founder or exec, <= 280 chars),\n'
+        '  "boilerplate": string (2-3 sentence "About" block),\n'
+        '  "contact": {"name": string, "email": string, "url": string},\n'
+        '  "disclaimer": string (safe-harbor / forward-looking statement)\n'
+        "}"
+    )
+    anthropic_instructions = (
+        "Write in AP-style press release format. Lead paragraph must answer "
+        "who/what/when/where/why. Body should include one quote from a "
+        "realistically-named internal executive (invent the name but keep it "
+        "plausible for the company). Avoid marketing hype — emulate the "
+        "voice of a serious enterprise press release. End with boilerplate "
+        "+ contact + safe-harbor disclaimer."
+    )
 
     async def generate_mock(self, ctx: GenContext) -> dict:
         project = ctx.project
@@ -165,9 +238,9 @@ class PressReleaseGenerator(_Base):
             "a CMO-style orchestrator that dispatches specialist agents for "
             "research, positioning, content, social, lifecycle, and podcast "
             "production — each grounded in an immutable brand kit.",
-            f"“{pillar_quote_source}” said the founding team. “Today we're "
+            f"\u201c{pillar_quote_source}\u201d said the founding team. \u201cToday we're "
             "shipping a system that lets a solo PMM punch several weight "
-            "classes above their headcount, without trading away brand safety.”",
+            "classes above their headcount, without trading away brand safety.\u201d",
         ]
         boilerplate = (
             f"About {project.name}: "
@@ -200,6 +273,21 @@ class ReleaseNotesGenerator(_Base):
         studio=ArtifactStudio.content.value,
         title="Release notes entry",
         description="Changelog-style release notes for your product site.",
+    )
+    anthropic_max_tokens = 1200
+    anthropic_schema = (
+        "{\n"
+        '  "version": string (semver or date),\n'
+        '  "summary": string (one-line summary of the release),\n'
+        '  "bullets": array of 4-8 strings, each prefixed with [New]/[Improved]/[Fixed],\n'
+        '  "upgrade_notes": array of 1-3 strings,\n'
+        '  "compatibility": string (one-line compatibility note)\n'
+        "}"
+    )
+    anthropic_instructions = (
+        "Produce a product-changelog entry in the style of a mature B2B SaaS "
+        "(think Linear or Stripe). Bullets should be concrete and verb-first. "
+        "Do not invent features that aren't in the source material."
     )
 
     async def generate_mock(self, ctx: GenContext) -> dict:

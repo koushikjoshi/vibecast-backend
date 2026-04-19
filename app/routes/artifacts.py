@@ -194,6 +194,43 @@ def list_project_artifacts(
     return [_summary(a) for a in rows]
 
 
+class ApprovalItem(BaseModel):
+    artifact: ArtifactSummary
+    project_id: UUID
+    project_name: str
+    project_slug: str
+
+
+@router.get("/w/{slug}/approval", response_model=list[ApprovalItem])
+def approval_queue(
+    session: Session = Depends(get_session),
+    ws: CurrentWorkspace = Depends(get_current_workspace),
+) -> list[ApprovalItem]:
+    rows = session.exec(
+        select(Artifact, MarketingProject)
+        .where(Artifact.workspace_id == ws.id)
+        .where(
+            Artifact.state.in_(
+                [
+                    ArtifactState.awaiting_approval.value,
+                    ArtifactState.changes_requested.value,
+                ]
+            )
+        )
+        .join(MarketingProject, Artifact.project_id == MarketingProject.id)
+        .order_by(Artifact.created_at.desc())
+    ).all()
+    return [
+        ApprovalItem(
+            artifact=_summary(art),
+            project_id=proj.id,
+            project_name=proj.name,
+            project_slug=proj.slug,
+        )
+        for art, proj in rows
+    ]
+
+
 @router.get("/w/{slug}/artifacts/{artifact_id}", response_model=ArtifactOut)
 def get_artifact(
     artifact_id: UUID,

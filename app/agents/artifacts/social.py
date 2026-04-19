@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from app.agents.artifacts.base import ArtifactSpec, GenContext
 from app.agents.artifacts._helpers import (
     brand_positioning,
     first_n,
     launch_date,
     pillar_lines,
     plan_pillars,
-    target_competitor,
 )
+from app.agents.artifacts.base import ArtifactSpec, GenContext
 from app.agents.artifacts.content import _Base
 from app.models import ArtifactStudio, ArtifactType
 
@@ -18,7 +17,22 @@ class XThreadGenerator(_Base):
         type=ArtifactType.x_thread.value,
         studio=ArtifactStudio.social.value,
         title="X launch thread",
-        description="7–9 post thread for X (Twitter).",
+        description="7\u20139 post thread for X (Twitter).",
+    )
+    anthropic_max_tokens = 1800
+    anthropic_schema = (
+        "{\n"
+        '  "posts": array of 7-9 strings, each <= 280 characters including whitespace,\n'
+        '  "hashtags": array of 2-4 strings starting with #\n'
+        "}"
+    )
+    anthropic_instructions = (
+        "Write an X (Twitter) launch thread of 7 to 9 posts. The first post "
+        "must hook in under 200 chars. Subsequent posts can carry more "
+        "detail but NEVER exceed 280 chars each. Use line breaks inside "
+        "posts for readability. Keep the founder voice \u2014 first-person plural "
+        "for the company, first-person singular for founder sentiment. End "
+        "with a CTA post that includes a link placeholder."
     )
 
     async def generate_mock(self, ctx: GenContext) -> dict:
@@ -30,9 +44,7 @@ class XThreadGenerator(_Base):
             "Why now?\n\nMarketing teams are stuck between $20k/mo agencies and one overworked PMM. We built a third option: a multi-agent team that works on your brief.",
         ]
         for p in pillars[:3]:
-            posts.append(
-                f"{p.get('name', '')}\n\n{p.get('message', '')}"
-            )
+            posts.append(f"{p.get('name', '')}\n\n{p.get('message', '')}")
         posts.append(
             "How it works:\n\n"
             "1. Upload a launch brief\n"
@@ -40,8 +52,10 @@ class XThreadGenerator(_Base):
             "3. Every artifact is brand-checked\n"
             "4. You approve. We ship."
         )
-        posts.append("12 artifacts per project: blog, press, release notes, LinkedIn (2), X thread, HN, Product Hunt, emails (2), battle card, and a podcast episode.")
-        posts.append(f"Start your first project → https://vibecast.ai ({launch_date(ctx)})")
+        posts.append(
+            "12 artifacts per project: blog, press, release notes, LinkedIn (2), X thread, HN, Product Hunt, emails (2), battle card, and a podcast episode."
+        )
+        posts.append(f"Start your first project \u2192 https://vibecast.ai ({launch_date(ctx)})")
         return {
             "posts": posts,
             "hashtags": ["#buildinpublic", "#marketing", "#ai"],
@@ -52,8 +66,22 @@ class LinkedInCompanyGenerator(_Base):
     spec = ArtifactSpec(
         type=ArtifactType.linkedin_company.value,
         studio=ArtifactStudio.social.value,
-        title="LinkedIn — company post",
+        title="LinkedIn \u2014 company post",
         description="LinkedIn post from the company page.",
+    )
+    anthropic_max_tokens = 900
+    anthropic_schema = (
+        "{\n"
+        '  "post": string (1200-2000 chars, LinkedIn-formatted with line breaks and bullets),\n'
+        '  "cta": {"label": string, "href": string}\n'
+        "}"
+    )
+    anthropic_instructions = (
+        "Write a LinkedIn company-page post. Structure: hook sentence, then a "
+        "crisp statement of the launch, then a bullet list of 3 concrete "
+        "outcomes, then a CTA line. Avoid emoji clutter (at most one). Use "
+        "LinkedIn-native line-break rhythm (short paragraphs, blank lines "
+        "between them)."
     )
 
     async def generate_mock(self, ctx: GenContext) -> dict:
@@ -64,11 +92,17 @@ class LinkedInCompanyGenerator(_Base):
             f"Today we're shipping {project.name}.\n\n"
             f"{positioning}\n\n"
             "What that means in practice:\n"
-            + "\n".join(f"• {p}" for p in (pillars or [
-                "One brief → a full launch kit.",
-                "Brand-safe by default.",
-                "Evidence-backed, GEO-structured content.",
-            ]))
+            + "\n".join(
+                f"\u2022 {p}"
+                for p in (
+                    pillars
+                    or [
+                        "One brief \u2192 a full launch kit.",
+                        "Brand-safe by default.",
+                        "Evidence-backed, GEO-structured content.",
+                    ]
+                )
+            )
             + "\n\nRead the launch: https://vibecast.ai/launch"
         )
         return {
@@ -81,21 +115,29 @@ class LinkedInFounderGenerator(_Base):
     spec = ArtifactSpec(
         type=ArtifactType.linkedin_founder.value,
         studio=ArtifactStudio.social.value,
-        title="LinkedIn — founder post",
+        title="LinkedIn \u2014 founder post",
         description="First-person launch post from the founder.",
+    )
+    anthropic_max_tokens = 900
+    anthropic_schema = '{\n  "post": string (800-1500 chars, first-person, LinkedIn-formatted)\n}'
+    anthropic_instructions = (
+        "Write a first-person LinkedIn post from the founder. Lead with a "
+        "specific personal anecdote (keep it plausible, not grandiose). "
+        "Transition to the launch and why it matters. End with a \u2018link in "
+        "comments\u2019 line. No emojis, no hype. LinkedIn-native line rhythm."
     )
 
     async def generate_mock(self, ctx: GenContext) -> dict:
         project = ctx.project
         positioning = brand_positioning(ctx)
         body = (
-            f"A year ago I was the first marketing hire at a B2B startup. "
-            "I was doing blog, press, social, lifecycle, and podcast — alone. "
+            "A year ago I was the first marketing hire at a B2B startup. "
+            "I was doing blog, press, social, lifecycle, and podcast \u2014 alone. "
             "I missed half of them.\n\n"
             f"Today we're shipping {project.name}.\n\n"
             f"{positioning}\n\n"
             "This is the tool I wish I had when I was that one overwhelmed PMM. "
-            "If that's you — give this a try.\n\nLink in comments."
+            "If that's you \u2014 give this a try.\n\nLink in comments."
         )
         return {"post": body}
 
@@ -107,13 +149,26 @@ class HnShowGenerator(_Base):
         title="HN 'Show HN' submission",
         description="Show HN title + first-comment body.",
     )
+    anthropic_max_tokens = 1100
+    anthropic_schema = (
+        "{\n"
+        '  "title": string (Hacker News "Show HN:" title, 60-90 chars),\n'
+        '  "first_comment": string (founder-style first comment, 600-1000 chars)\n'
+        "}"
+    )
+    anthropic_instructions = (
+        "HN audience is technical and skeptical. Title must start with "
+        "'Show HN: '. First comment should introduce the founder, give an "
+        "honest technical summary (what's under the hood), acknowledge "
+        "known limitations, and invite feedback. No marketing adjectives."
+    )
 
     async def generate_mock(self, ctx: GenContext) -> dict:
         project = ctx.project
         positioning = brand_positioning(ctx)
-        title = f"Show HN: {project.name} — {positioning}"
+        title = f"Show HN: {project.name} \u2014 {positioning}"
         first_comment = (
-            f"Hi HN! Founder here.\n\n"
+            "Hi HN! Founder here.\n\n"
             f"{project.name} is a multi-agent marketing team for B2B startups. "
             "You upload a launch brief, we spin up a CMO + 17 specialist agents, "
             "and you get a full launch kit (blog, press, social, email, podcast) "
@@ -133,6 +188,22 @@ class ProductHuntGenerator(_Base):
         studio=ArtifactStudio.social.value,
         title="Product Hunt kit",
         description="Tagline + first comment + 4 gallery briefs.",
+    )
+    anthropic_max_tokens = 1400
+    anthropic_schema = (
+        "{\n"
+        '  "tagline": string (<= 60 chars),\n'
+        '  "description": string (260-300 chars, Product Hunt description),\n'
+        '  "first_comment": string (founder intro comment, 500-800 chars),\n'
+        '  "gallery_briefs": array of exactly 4 objects {"frame": int, "scene": string, "note": string}\n'
+        "}"
+    )
+    anthropic_instructions = (
+        "Produce a Product Hunt launch kit. Tagline must be punchy and under "
+        "60 characters. Description must fit PH's ~260-char limit. First "
+        "comment should read like a real founder intro (warm, honest, brief). "
+        "Gallery briefs are prompts for image generation \u2014 describe what each "
+        "frame shows, not marketing copy."
     )
 
     async def generate_mock(self, ctx: GenContext) -> dict:

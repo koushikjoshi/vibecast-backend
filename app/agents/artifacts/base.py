@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, Sequence
+from uuid import UUID
 
 from app.models import (
     BrandKit,
@@ -19,6 +20,12 @@ class GenContext:
     competitors: Sequence[Competitor]
     sources: Sequence[ProjectSource]
     plan: CampaignPlan
+    # Optional streaming wiring. When set, generators publish live token
+    # chunks into the run's SSE bus so the frontend can render the model
+    # "typing" live.
+    run_id: UUID | None = None
+    step_id: UUID | None = None
+    agent_label: str = field(default="")
 
 
 @dataclass

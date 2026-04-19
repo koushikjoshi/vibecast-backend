@@ -12,6 +12,7 @@ This keeps hackathon-demo costs bounded and failure modes obvious.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -23,8 +24,9 @@ from app.agents.schemas import (
     ChannelPick,
     Pillar,
     ResearchFinding,
+    StepEvent,
 )
-from app.agents.trace import StepTracker
+from app.agents.trace import StepTracker, publish
 
 logger = logging.getLogger("vibecast.agents.anthropic")
 
@@ -77,11 +79,14 @@ def _cost(model: str, tokens_in: int, tokens_out: int) -> float:
 
 
 def _format_sources(inputs: PlanningInput) -> str:
+    # Aggressively truncated to respect Anthropic Tier-1 TPM (30k input
+    # tokens/min). Quality remains high because we demand specificity,
+    # not volume, in the manifesto.
     blocks: list[str] = []
-    for i, s in enumerate(inputs.sources, 1):
+    for i, s in enumerate(inputs.sources[:6], 1):
         body = s.normalized_text or s.raw_input or ""
-        blocks.append(f"[{i}] type={s.type}\n{body[:2000]}")
-    return "\n\n".join(blocks)[:12000]
+        blocks.append(f"[{i}] type={s.type}\n{body[:700]}")
+    return "\n\n".join(blocks)[:3500]
 
 
 def _format_brand(inputs: PlanningInput) -> str:
@@ -203,6 +208,9 @@ async def run_planning_anthropic(
         cost_usd=_cost("claude-haiku-4-5", usage.input_tokens, usage.output_tokens),
     )
 
+    # Small pause between agents to smooth Anthropic Tier-1 TPM (30k/min).
+    await asyncio.sleep(1.5)
+
     # --- Agent 2: market-researcher (web search) -----------------------------
     research_step = tracker.start(
         "market-researcher",
@@ -213,12 +221,12 @@ async def run_planning_anthropic(
     try:
         research_resp = await client.messages.create(
             model=model,
-            max_tokens=2500,
+            max_tokens=1600,
             tools=[
                 {
                     "type": "web_search_20250305",
                     "name": "web_search",
-                    "max_uses": 5,
+                    "max_uses": 3,
                 }
             ],
             system=(
@@ -369,74 +377,90 @@ async def run_planning_anthropic(
         "urgency_framing. No prose before or after."
     )
 
-    try:
-        strategy_resp = await client.messages.create(
-            model=model,
-            max_tokens=6000,
-            thinking={"type": "enabled", "budget_tokens": 3500},
-            temperature=1.0,
-            system=strategist_system,
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        f"Project: {project.name}\n"
-                        f"Launch date: {project.launch_date}\n\n"
-                        f"Brand kit (immutable constraints):\n{brand_summary}\n\n"
-                        f"Intake summary: {intake_json.get('summary', '')}\n"
-                        f"Intake signals: {intake_json.get('signals', [])}\n\n"
-                        f"Research findings (cite these by substance):\n"
-                        + json.dumps([f.model_dump() for f in findings], indent=2)
-                        + f"\n\nKnown competitors:\n{competitors_list}\n\n"
-                        f"Source material:\n{source_corpus[:6000]}\n\n"
-                        "Emit the Campaign Plan JSON object."
-                    ),
-                }
-            ],
-        )
-    except Exception as exc:
-        # Retry without extended thinking for older keys/tiers.
-        if "thinking" in str(exc).lower():
-            logger.info("strategist: extended thinking unavailable, retrying without")
-            strategy_resp = await client.messages.create(
-                model=model,
-                max_tokens=4500,
-                system=strategist_system,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Project: {project.name}\n"
-                            f"Launch date: {project.launch_date}\n\n"
-                            f"Brand kit:\n{brand_summary}\n\n"
-                            f"Intake summary: {intake_json.get('summary', '')}\n"
-                            f"Intake signals: {intake_json.get('signals', [])}\n\n"
-                            f"Research findings:\n"
-                            + json.dumps([f.model_dump() for f in findings], indent=2)
-                            + f"\n\nCompetitors:\n{competitors_list}\n\n"
-                            f"Source material:\n{source_corpus[:6000]}\n\n"
-                            "Emit the Campaign Plan JSON object now."
-                        ),
-                    }
-                ],
-            )
-        else:
-            tracker.fail(strategy_step, error=str(exc))
-            raise
+    # Brief spacer to smooth Tier-1 TPM (30k input tokens/min) after the
+    # web-search-heavy research call, which can be token-dense.
+    await asyncio.sleep(2.0)
 
-    strategy_text = _final_text(strategy_resp)
+    strategist_messages = [
+        {
+            "role": "user",
+            "content": (
+                f"Project: {project.name}\n"
+                f"Launch date: {project.launch_date}\n\n"
+                f"Brand kit (immutable constraints):\n{brand_summary}\n\n"
+                f"Intake summary: {intake_json.get('summary', '')}\n"
+                f"Intake signals: {intake_json.get('signals', [])}\n\n"
+                f"Research findings (cite these by substance):\n"
+                + json.dumps([f.model_dump() for f in findings], indent=2)
+                + f"\n\nKnown competitors:\n{competitors_list}\n\n"
+                f"Source material:\n{source_corpus[:2500]}\n\n"
+                "Emit the Campaign Plan JSON object."
+            ),
+        }
+    ]
+
+    strategy_text = ""
+    strategy_usage = None
+    try:
+        async with client.messages.stream(
+            model=model,
+            max_tokens=2500,
+            system=strategist_system,
+            messages=strategist_messages,
+        ) as stream:
+            buffer = ""
+            async for event in stream:
+                etype = getattr(event, "type", None)
+                if etype != "content_block_delta":
+                    continue
+                delta = getattr(event, "delta", None)
+                if delta is None or getattr(delta, "type", None) != "text_delta":
+                    continue
+                chunk = getattr(delta, "text", "") or ""
+                if not chunk:
+                    continue
+                strategy_text += chunk
+                buffer += chunk
+                if len(buffer) >= 80:
+                    publish(
+                        tracker.run_id,
+                        StepEvent(
+                            type="chunk",
+                            agent="launch-strategist",
+                            message=buffer,
+                            data={"step_id": str(strategy_step.id)},
+                        ),
+                    )
+                    buffer = ""
+            if buffer:
+                publish(
+                    tracker.run_id,
+                    StepEvent(
+                        type="chunk",
+                        agent="launch-strategist",
+                        message=buffer,
+                        data={"step_id": str(strategy_step.id)},
+                    ),
+                )
+            final_msg = await stream.get_final_message()
+            strategy_usage = getattr(final_msg, "usage", None)
+    except Exception as exc:
+        tracker.fail(strategy_step, error=str(exc))
+        raise
+
     plan_json = _extract_json(strategy_text)
     if not plan_json:
         tracker.fail(strategy_step, error="strategist did not return JSON")
         raise RuntimeError("planning failed: strategist output was not JSON")
 
-    usage = strategy_resp.usage
+    tokens_in = getattr(strategy_usage, "input_tokens", 0) if strategy_usage else 0
+    tokens_out = getattr(strategy_usage, "output_tokens", 0) if strategy_usage else 0
     tracker.succeed(
         strategy_step,
         output_data=plan_json,
-        tokens_in=usage.input_tokens,
-        tokens_out=usage.output_tokens,
-        cost_usd=_cost(model, usage.input_tokens, usage.output_tokens),
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+        cost_usd=_cost(model, tokens_in, tokens_out),
     )
 
     plan = CampaignPlanDraft(

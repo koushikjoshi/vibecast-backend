@@ -19,8 +19,8 @@ class CustomerEmailGenerator(_Base):
         title="Customer announcement email",
         description="Broadcast to existing customers on launch day.",
     )
-    anthropic_max_tokens = 2500
-    anthropic_thinking_budget = 1500
+    anthropic_max_tokens = 1700
+    anthropic_thinking_budget = 0
     anthropic_schema = (
         "{\n"
         '  "from_name": string (sender display name, e.g. "Alex at Acme" \u2014 a real name humanizes better than "The Acme Team"),\n'
@@ -114,8 +114,8 @@ class ProspectEmailGenerator(_Base):
         title="Prospect nurture email",
         description="Cold-nurture email for active prospects.",
     )
-    anthropic_max_tokens = 2000
-    anthropic_thinking_budget = 1500
+    anthropic_max_tokens = 1500
+    anthropic_thinking_budget = 0
     anthropic_schema = (
         "{\n"
         '  "from_name": string (a specific human name + title, e.g. "Koushik, co-founder at VibeCast"),\n'
@@ -202,8 +202,8 @@ class BattleCardGenerator(_Base):
         title="Battle card",
         description="Sales battle card focused on the primary competitor.",
     )
-    anthropic_max_tokens = 3500
-    anthropic_thinking_budget = 2500
+    anthropic_max_tokens = 2200
+    anthropic_thinking_budget = 0
     anthropic_schema = (
         "{\n"
         '  "vs": string (competitor name as chosen from the competitors list \u2014 use their exact company name),\n'

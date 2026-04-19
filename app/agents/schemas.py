@@ -14,7 +14,10 @@ class Pillar(BaseModel):
 class ChannelPick(BaseModel):
     channel: str
     rationale: str
-    expected_impact: Literal["high", "medium", "low"] = "medium"
+    # Short descriptive phrase, e.g. "primary traffic driver",
+    # "objection-handling for sales", "signal-to-investors". Free-form
+    # string since strategist prompts encourage specific language.
+    expected_impact: str = "medium"
 
 
 class ResearchFinding(BaseModel):
@@ -43,6 +46,7 @@ class StepEvent(BaseModel):
         "step.failed",
         "log",
         "artifact",
+        "chunk",
     ]
     agent: str | None = None
     tool: str | None = None

@@ -37,6 +37,8 @@ from app.agents.artifacts._helpers import (
     source_text,
 )
 from app.agents.artifacts.base import GenContext
+from app.agents.schemas import StepEvent
+from app.agents.trace import publish
 
 logger = logging.getLogger("vibecast.artifacts.anthropic")
 
@@ -228,8 +230,8 @@ async def generate_via_claude(
     title: str,
     anthropic_schema: str,
     anthropic_instructions: str,
-    max_tokens: int = 4000,
-    thinking_budget: int = 2000,
+    max_tokens: int = 2200,
+    thinking_budget: int = 0,
 ) -> dict:
     """Call Claude Sonnet with extended thinking to produce a structured artifact.
 
@@ -284,7 +286,7 @@ async def generate_via_claude(
         f"{_plan_block(ctx)}\n\n"
         f"# Competitors\n{_competitor_block(ctx)}\n\n"
         f"# Source material (launch brief, uploaded docs, URLs)\n"
-        f"{source_text(ctx, max_chars=10000)}\n\n"
+        f"{source_text(ctx, max_chars=2500)}\n\n"
         f"Now produce the `{artifact_type}` artifact as the single JSON "
         f"object defined in the schema. No prose, no fences."
     )
@@ -301,11 +303,62 @@ async def generate_via_claude(
         kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
         kwargs["temperature"] = 1.0
 
+    # Stream chunks back into the run's SSE bus so the frontend can render
+    # the model "typing" live — matches the UX expected from modern agentic
+    # apps. Falls back to non-streaming if the stream API is unavailable.
+    text = ""
+    run_id = getattr(ctx, "run_id", None)
+    step_id = getattr(ctx, "step_id", None)
+    agent_label = getattr(ctx, "agent_label", "") or f"{studio}:{artifact_type}"
+
     try:
-        resp = await client.messages.create(**kwargs)
+        async with client.messages.stream(**kwargs) as stream:
+            buffer = ""
+            last_flush = 0
+            async for event in stream:
+                delta_text = ""
+                etype = getattr(event, "type", None)
+                if etype == "content_block_delta":
+                    delta = getattr(event, "delta", None)
+                    if delta is not None and getattr(delta, "type", None) == "text_delta":
+                        delta_text = getattr(delta, "text", "") or ""
+                if not delta_text:
+                    continue
+                text += delta_text
+                buffer += delta_text
+                # Flush to SSE every ~80 chars so the UI paints smoothly
+                # without us spamming the event loop.
+                if run_id and len(buffer) - last_flush >= 80:
+                    publish(
+                        run_id,
+                        StepEvent(
+                            type="chunk",
+                            agent=agent_label,
+                            message=buffer,
+                            data={
+                                "step_id": str(step_id) if step_id else None,
+                                "artifact_type": artifact_type,
+                            },
+                        ),
+                    )
+                    buffer = ""
+                    last_flush = 0
+            if run_id and buffer:
+                publish(
+                    run_id,
+                    StepEvent(
+                        type="chunk",
+                        agent=agent_label,
+                        message=buffer,
+                        data={
+                            "step_id": str(step_id) if step_id else None,
+                            "artifact_type": artifact_type,
+                        },
+                    ),
+                )
     except Exception as exc:
-        # Extended thinking is only available on some models / tiers. Retry
-        # once without it so the demo path still works on older keys.
+        # If streaming is unavailable or thinking is rejected, fall back
+        # to a single non-streaming call so the demo path still works.
         if thinking_budget and "thinking" in str(exc).lower():
             logger.info(
                 "artifact %s: extended thinking unavailable, retrying without",
@@ -313,15 +366,11 @@ async def generate_via_claude(
             )
             kwargs.pop("thinking", None)
             kwargs.pop("temperature", None)
-            resp = await client.messages.create(**kwargs)
-        else:
-            raise
-
-    text = ""
-    for block in resp.content or []:
-        # Skip `thinking` blocks; only collect text output.
-        if getattr(block, "type", None) == "text":
-            text += block.text
+        resp = await client.messages.create(**kwargs)
+        text = ""
+        for block in resp.content or []:
+            if getattr(block, "type", None) == "text":
+                text += block.text
 
     parsed = _extract_json(text)
     if parsed is None:

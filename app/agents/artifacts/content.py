@@ -23,8 +23,11 @@ class _Base:
     spec: ArtifactSpec
     anthropic_schema: ClassVar[str] = ""
     anthropic_instructions: ClassVar[str] = ""
-    anthropic_max_tokens: ClassVar[int] = 4000
-    anthropic_thinking_budget: ClassVar[int] = 2000
+    # Tuned for Anthropic Tier-1 TPM (30k input tokens/min). Extended
+    # thinking is off by default for artifacts; enable per-artifact only
+    # where the creative lift is huge (e.g. the flagship blog post).
+    anthropic_max_tokens: ClassVar[int] = 2000
+    anthropic_thinking_budget: ClassVar[int] = 0
 
     async def generate_anthropic(self, ctx: GenContext) -> dict:
         if not self.anthropic_schema:
@@ -60,8 +63,8 @@ class BlogGenerator(_Base):
         title="Launch blog post (GEO-optimized)",
         description="Long-form launch blog structured for AI retrieval (GEO) and social sharing.",
     )
-    anthropic_max_tokens = 5000
-    anthropic_thinking_budget = 3000
+    anthropic_max_tokens = 2800
+    anthropic_thinking_budget = 0
     anthropic_schema = (
         "{\n"
         '  "headline": string (SEO title, 55-72 chars, front-loaded keyword),\n'
@@ -227,8 +230,8 @@ class PressReleaseGenerator(_Base):
         title="Press release",
         description="AP-style press release for launch day.",
     )
-    anthropic_max_tokens = 3500
-    anthropic_thinking_budget = 2000
+    anthropic_max_tokens = 2200
+    anthropic_thinking_budget = 0
     anthropic_schema = (
         "{\n"
         '  "dateline": string ("CITY \u2014 Month D, YYYY" format, all caps city),\n'
@@ -345,8 +348,8 @@ class ReleaseNotesGenerator(_Base):
         title="Release notes entry",
         description="Changelog-style release notes for your product site.",
     )
-    anthropic_max_tokens = 2000
-    anthropic_thinking_budget = 1200
+    anthropic_max_tokens = 1600
+    anthropic_thinking_budget = 0
     anthropic_schema = (
         "{\n"
         '  "version": string (semver like "1.4.0" or ISO date),\n'

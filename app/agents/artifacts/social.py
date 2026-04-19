@@ -19,8 +19,8 @@ class XThreadGenerator(_Base):
         title="X launch thread",
         description="7\u20139 post thread for X (Twitter).",
     )
-    anthropic_max_tokens = 3000
-    anthropic_thinking_budget = 1800
+    anthropic_max_tokens = 1800
+    anthropic_thinking_budget = 0
     anthropic_schema = (
         "{\n"
         '  "posts": array of 7-9 strings, each <= 275 characters including whitespace and line breaks. Post 1 is the hook and must be under 210 chars.,\n'
@@ -106,8 +106,8 @@ class LinkedInCompanyGenerator(_Base):
         title="LinkedIn \u2014 company post",
         description="LinkedIn post from the company page.",
     )
-    anthropic_max_tokens = 2000
-    anthropic_thinking_budget = 1200
+    anthropic_max_tokens = 1400
+    anthropic_thinking_budget = 0
     anthropic_schema = (
         "{\n"
         '  "post": string (1400-2500 chars, LinkedIn-formatted with intentional line breaks. Must render well with LinkedIn\'s "see more" truncation after ~210 chars on desktop \u2014 so the first 200 chars must be a complete, scroll-stopping thought.),\n'
@@ -175,8 +175,8 @@ class LinkedInFounderGenerator(_Base):
         title="LinkedIn \u2014 founder post",
         description="First-person launch post from the founder.",
     )
-    anthropic_max_tokens = 2000
-    anthropic_thinking_budget = 1400
+    anthropic_max_tokens = 1500
+    anthropic_thinking_budget = 0
     anthropic_schema = (
         "{\n"
         '  "post": string (900-1800 chars, first-person, LinkedIn-formatted). First 210 chars must work as a standalone scroll-stopper because LinkedIn truncates after that.,\n'
@@ -238,8 +238,8 @@ class HnShowGenerator(_Base):
         title="HN 'Show HN' submission",
         description="Show HN title + first-comment body.",
     )
-    anthropic_max_tokens = 2200
-    anthropic_thinking_budget = 1500
+    anthropic_max_tokens = 1700
+    anthropic_thinking_budget = 0
     anthropic_schema = (
         "{\n"
         '  "title": string (Hacker News "Show HN:" title, 55-80 chars, MUST start with "Show HN: "),\n'
@@ -316,8 +316,8 @@ class ProductHuntGenerator(_Base):
         title="Product Hunt kit",
         description="Tagline + first comment + 4 gallery briefs.",
     )
-    anthropic_max_tokens = 2500
-    anthropic_thinking_budget = 1500
+    anthropic_max_tokens = 1800
+    anthropic_thinking_budget = 0
     anthropic_schema = (
         "{\n"
         '  "tagline": string (<= 60 chars, verb-optional; "A [noun] for [audience]" is a classic PH format),\n'

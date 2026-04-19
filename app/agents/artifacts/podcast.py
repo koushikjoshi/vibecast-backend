@@ -21,8 +21,8 @@ class PodcastEpisodeGenerator(_Base):
             "and an RSS-ready metadata block."
         ),
     )
-    anthropic_max_tokens = 6000
-    anthropic_thinking_budget = 3500
+    anthropic_max_tokens = 3200
+    anthropic_thinking_budget = 0
     anthropic_schema = (
         "{\n"
         '  "episode_title": string (45-80 chars, NOT "Episode 1: <product> Launch"; use a hook-style title that would earn a click in a podcast app),\n'

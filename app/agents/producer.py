@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -125,7 +126,14 @@ async def run_producing(
                 session.commit()
 
             created_artifacts: list[Artifact] = []
-            for artifact_type in types:
+            # Pace artifact generation so we stay under the Anthropic
+            # Tier-1 rate limit (30k input tokens/min). Roughly 6s between
+            # artifacts keeps us at ~10 requests/min regardless of prompt
+            # size spikes. Mock mode skips this.
+            inter_artifact_delay = 6.0 if mode == "anthropic" else 0.0
+            for idx, artifact_type in enumerate(types):
+                if idx > 0 and inter_artifact_delay > 0:
+                    await asyncio.sleep(inter_artifact_delay)
                 generator = REGISTRY.get(artifact_type)
                 if generator is None:
                     tracker.log(
@@ -142,7 +150,31 @@ async def run_producing(
                 )
                 try:
                     if mode == "anthropic":
-                        payload = await generator.generate_anthropic(ctx)
+                        # Wire streaming: tell the Claude helper which run
+                        # and step to publish live chunks against.
+                        ctx.run_id = run_id
+                        ctx.step_id = step.id
+                        ctx.agent_label = agent_name
+                        try:
+                            payload = await generator.generate_anthropic(ctx)
+                        except Exception as exc:  # noqa: BLE001
+                            msg = str(exc).lower()
+                            is_rate_limit = (
+                                "429" in msg
+                                or "rate_limit" in msg
+                                or "rate limit" in msg
+                            )
+                            if is_rate_limit:
+                                tracker.log(
+                                    agent_name,
+                                    "Anthropic rate limit hit; cooling down 20s "
+                                    "and falling back to deterministic draft "
+                                    "for this artifact.",
+                                )
+                                await asyncio.sleep(20.0)
+                                payload = await generator.generate_mock(ctx)
+                            else:
+                                raise
                     else:
                         payload = await generator.generate_mock(ctx)
                 except Exception as exc:  # noqa: BLE001

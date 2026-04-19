@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.db import init_db
+from app.routes import artifacts as artifact_routes
 from app.routes import auth as auth_routes
 from app.routes import brand as brand_routes
 from app.routes import competitors as competitors_routes
@@ -54,6 +55,7 @@ def create_app() -> FastAPI:
     app.include_router(competitors_routes.router)
     app.include_router(projects_routes.router)
     app.include_router(run_routes.router)
+    app.include_router(artifact_routes.router)
 
     return app
 

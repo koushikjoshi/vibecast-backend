@@ -1,15 +1,25 @@
 """Shared helper for running real Claude generation on a single artifact.
 
-Each artifact generator declares two bits of per-type config:
-  * `anthropic_schema` — a text description of the exact JSON keys the
-    generator wants back. This is included verbatim in the system prompt.
-  * `anthropic_instructions` — per-artifact creative guidance (tone, length
-    bounds, required sections, etc.).
+Design goals:
+  * Output that reads like it was written by a senior B2B marketer with
+    context on the product, the market, and the brand voice — not like
+    generic AI output.
+  * Enforced anti-patterns: no "ever-evolving landscape", no "leveraging",
+    no "unlocking", no rule-of-three list obsession, no em-dash vomit, no
+    emoji clutter, no fabricated statistics.
+  * Extended thinking enabled by default so Claude genuinely deliberates
+    before it emits JSON. This is the single biggest quality lever
+    available on the Messages API.
 
-`generate_via_claude` then fans in the project brief + brand kit + plan +
-competitor context, calls Claude Sonnet, and parses a JSON dict out of the
-response. Used by every studio (content, social, lifecycle, podcast) so the
-prompting pattern is uniform and debuggable.
+Each generator declares:
+  * `anthropic_schema` — exact JSON keys the generator expects back.
+  * `anthropic_instructions` — per-artifact craft direction. The more
+    specific the better. Give structural guidance, sample phrasings,
+    things to avoid.
+  * `anthropic_max_tokens` — output budget. Must include the thinking
+    budget below when thinking is enabled.
+  * `anthropic_thinking_budget` — tokens Claude can burn on internal
+    deliberation before producing the JSON. 0 disables thinking.
 """
 
 from __future__ import annotations
@@ -30,7 +40,114 @@ from app.agents.artifacts.base import GenContext
 
 logger = logging.getLogger("vibecast.artifacts.anthropic")
 
-ARTIFACT_MODEL = "claude-sonnet-4-5"
+ARTIFACT_MODEL = os.getenv("ANTHROPIC_ARTIFACT_MODEL", "claude-sonnet-4-5")
+
+
+# ---------------------------------------------------------------------------
+# Craft manifesto — injected into every artifact system prompt so the model
+# hears the same non-negotiables every time.
+# ---------------------------------------------------------------------------
+
+CRAFT_MANIFESTO = """# Who you are
+
+You are a senior B2B marketing operator embedded inside the VibeCast
+agent system. Before this you spent eight years at companies like Linear,
+Stripe, Vercel, and Notion. You have strong opinions about craft. You've
+shipped launches that made the top of Hacker News, been quoted in
+TechCrunch, and sat through enough founder-review cycles to know exactly
+what the best ones cut. You treat marketing as a systems discipline, not
+a decoration on top of a product.
+
+You are NOT a generic AI assistant. You are not playing a character. The
+voice in your output is the voice of someone who has done this job.
+
+# Craft principles (non-negotiable)
+
+1. **Specificity beats abstraction every time.**
+   - Bad: "We help teams move faster."
+   - Good: "Acme teams cut their sprint planning from 90 minutes to 22."
+   - If you cannot cite a number, cite a named mechanism. If you cannot
+     cite a mechanism, cut the sentence.
+
+2. **Concrete nouns over marketing nouns.**
+   - Replace "solution" → "tool", "product", "workflow", or the literal
+     name of the thing.
+   - Replace "leverage" → "use".
+   - Replace "unlock" → "let", "make it possible", or delete.
+   - Replace "empower" → "let".
+   - Replace "utilize" → "use".
+   - Replace "in today's ever-evolving landscape" → delete the entire
+     paragraph; it is a marker of AI-generated text and must not appear.
+
+3. **Earned claims only.**
+   - Do not fabricate customer names, logos, quotes, stats, or case
+     studies. If the source material does not contain the evidence, do
+     not cite evidence. Speak from principle instead.
+   - If you need a quote, attribute it to a plausible internal role
+     ("founding team", "head of product") and make it content-bearing,
+     not cheerleading.
+
+4. **Earn the reader's next scroll.**
+   - The first sentence must do work. It should either name a specific
+     problem the reader has, or deliver a claim that is interesting
+     because it's narrow.
+   - Never open with "In today's" or "As companies increasingly".
+   - Never open with a question-to-hook ("Ever wondered if...").
+
+5. **Voice calibration.**
+   - You will be given the brand's voice in the input. Follow it as if
+     you are the copy chief approving release-ready work.
+   - If the brand voice is "clear, confident, evidence-first" — that
+     means short sentences, no hedging, citations over adjectives.
+   - If the brand voice is "warm and witty" — allow one genuine,
+     non-cringe joke. Never more than one.
+
+6. **Structural discipline.**
+   - Avoid the rule-of-three trap. If you have four good points, write
+     four. If you have two, write two.
+   - Bullet lists are for parallel items only. If items aren't parallel,
+     write prose.
+   - Paragraphs are 2-4 sentences. Not 1. Not 6.
+
+7. **Honesty about trade-offs.**
+   - When an artifact calls for it (battle card, prospect email, HN
+     post), name the real trade-off. Readers trust writers who admit
+     where the thing is weak. Avoid false humility.
+
+8. **No AI tells.**
+   The following are immediate red flags. Output containing any of these
+   will be rejected:
+   - "revolutionize", "revolutionary", "game-changer", "game-changing"
+   - "unlocking the power of", "unleashing"
+   - "in the rapidly evolving landscape of"
+   - "seamlessly", "effortlessly", "cutting-edge", "best-in-class",
+     "world-class", "state-of-the-art", "robust"
+   - "delve into", "embark on a journey", "navigate the complexities"
+   - Three-item lists when a two- or four-item list fits better
+   - Em-dash abuse (use one per paragraph max)
+   - Starting multiple sentences with "Moreover", "Furthermore",
+     "Additionally"
+   - Ending with a generic flourish like "The possibilities are endless"
+
+9. **Respect the brand kit's banned_phrases array absolutely.**
+   If a phrase is in banned_phrases, it cannot appear in output — not
+   even in paraphrase. Rewrite around it.
+
+10. **Respect the brand kit's required_disclaimers.**
+    Every disclaimer in that array must appear verbatim somewhere in the
+    output when contextually relevant (legal footer, email footer, etc.).
+
+# Output contract
+
+Respond with a SINGLE JSON object and nothing else. No prose before or
+after the JSON. No markdown fences. No comments inside the JSON. Never
+invent additional keys beyond the schema. String values can contain
+Markdown where the schema says so.
+
+If you truly cannot produce the artifact (the source material is empty,
+for example), output this exact JSON: `{"error": "insufficient context",
+"reason": "<one-sentence reason>"}` and stop. Do not fabricate content
+to fill the schema."""
 
 
 def _brand_block(ctx: GenContext) -> str:
@@ -77,13 +194,18 @@ def _plan_block(ctx: GenContext) -> str:
 
 def _competitor_block(ctx: GenContext) -> str:
     if not ctx.competitors:
-        return "(none)"
-    return "\n".join(f"- {c.name} ({c.website_url})" for c in ctx.competitors)
+        return "(no competitors provided)"
+    lines: list[str] = []
+    for c in ctx.competitors:
+        line = f"- {c.name} ({c.website_url})"
+        if c.positioning_cached:
+            line += f"\n    positioning: {c.positioning_cached[:240]}"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def _extract_json(text: str) -> dict | None:
     text = text.strip()
-    # Strip common ```json fences
     if text.startswith("```"):
         text = text.strip("`")
         if text.lower().startswith("json"):
@@ -106,12 +228,18 @@ async def generate_via_claude(
     title: str,
     anthropic_schema: str,
     anthropic_instructions: str,
-    max_tokens: int = 2500,
+    max_tokens: int = 4000,
+    thinking_budget: int = 2000,
 ) -> dict:
-    """Call Claude Sonnet to generate a structured artifact payload.
+    """Call Claude Sonnet with extended thinking to produce a structured artifact.
 
-    Raises RuntimeError on missing key, import failure, or unparseable output
-    so the caller can fall back to the mock generator.
+    Thinking is enabled by default. It roughly doubles latency but produces
+    dramatically better output on nuanced writing tasks. Set
+    `thinking_budget=0` on a per-artifact basis to disable for short,
+    mechanical artifacts where extra deliberation adds no value.
+
+    Raises RuntimeError on missing key, import failure, or unparseable
+    output so the caller can fall back to the deterministic mock.
     """
 
     api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -126,25 +254,25 @@ async def generate_via_claude(
     client = anthropic.AsyncAnthropic(api_key=api_key)
 
     system_prompt = (
-        f"You are a senior B2B marketing specialist producing a single "
-        f"`{artifact_type}` artifact for the `{studio}` studio inside the "
-        f"VibeCast agentic marketing system.\n\n"
-        f"Artifact title: {title}\n\n"
-        f"# Output contract\n"
-        f"Respond with a SINGLE JSON object and nothing else. No prose before "
-        f"or after. No markdown fences. No comments.\n\n"
-        f"The JSON object MUST contain these keys (extra keys are forbidden):\n"
+        f"{CRAFT_MANIFESTO}\n\n"
+        f"# This specific artifact\n\n"
+        f"Type: `{artifact_type}`\n"
+        f"Studio: `{studio}`\n"
+        f"Title: {title}\n\n"
+        f"## JSON schema (exact keys required)\n\n"
         f"{anthropic_schema}\n\n"
-        f"# Creative instructions\n"
+        f"## Craft direction for this artifact\n\n"
         f"{anthropic_instructions}\n\n"
-        f"# Hard constraints\n"
-        f"- Respect the brand voice, banned phrases, and required disclaimers "
-        f"provided below. Do not output any banned phrase, even in paraphrase.\n"
-        f"- If the brand's competitor_policy is `name-only`, reference "
-        f"competitors by name without trashing them.\n"
-        f"- Never fabricate citations, stats, or customer quotes. If you need "
-        f"evidence, base it only on the source material provided.\n"
-        f"- Write in the brand's voice, not a generic AI-marketing tone.\n"
+        f"## Process (follow in order)\n\n"
+        f"1. Read the project brief, brand kit, campaign plan, and "
+        f"competitors carefully. Extract every concrete detail — product "
+        f"names, dates, numbers, named features, target personas.\n"
+        f"2. Identify three things that make this launch specifically "
+        f"interesting vs. a generic SaaS launch. Note them.\n"
+        f"3. Draft the artifact internally, obeying every craft rule.\n"
+        f"4. Self-review: scan for banned phrases, AI tells, unearned "
+        f"claims, and filler sentences. Cut ruthlessly.\n"
+        f"5. Emit the final JSON object."
     )
 
     user_prompt = (
@@ -152,28 +280,62 @@ async def generate_via_claude(
         f"name: {ctx.project.name}\n"
         f"launch_date: {launch_date(ctx)}\n\n"
         f"# Brand kit\n{_brand_block(ctx)}\n\n"
-        f"# Campaign plan\n{_plan_block(ctx)}\n\n"
+        f"# Campaign plan (approved by the human reviewer)\n"
+        f"{_plan_block(ctx)}\n\n"
         f"# Competitors\n{_competitor_block(ctx)}\n\n"
-        f"# Source material (truncated)\n{source_text(ctx, max_chars=8000)}\n\n"
-        f"Now emit the single JSON object for the `{artifact_type}` artifact."
+        f"# Source material (launch brief, uploaded docs, URLs)\n"
+        f"{source_text(ctx, max_chars=10000)}\n\n"
+        f"Now produce the `{artifact_type}` artifact as the single JSON "
+        f"object defined in the schema. No prose, no fences."
     )
 
-    resp = await client.messages.create(
-        model=ARTIFACT_MODEL,
-        max_tokens=max_tokens,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_prompt}],
-    )
+    kwargs: dict[str, Any] = {
+        "model": ARTIFACT_MODEL,
+        "max_tokens": max_tokens,
+        "system": system_prompt,
+        "messages": [{"role": "user", "content": user_prompt}],
+    }
+    if thinking_budget and thinking_budget > 0:
+        # Extended thinking forces Claude to deliberate before speaking.
+        # Requires temperature=1 per Anthropic docs.
+        kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
+        kwargs["temperature"] = 1.0
+
+    try:
+        resp = await client.messages.create(**kwargs)
+    except Exception as exc:
+        # Extended thinking is only available on some models / tiers. Retry
+        # once without it so the demo path still works on older keys.
+        if thinking_budget and "thinking" in str(exc).lower():
+            logger.info(
+                "artifact %s: extended thinking unavailable, retrying without",
+                artifact_type,
+            )
+            kwargs.pop("thinking", None)
+            kwargs.pop("temperature", None)
+            resp = await client.messages.create(**kwargs)
+        else:
+            raise
 
     text = ""
     for block in resp.content or []:
+        # Skip `thinking` blocks; only collect text output.
         if getattr(block, "type", None) == "text":
             text += block.text
 
     parsed = _extract_json(text)
     if parsed is None:
         logger.warning(
-            "artifact %s: claude returned non-JSON output (len=%d)", artifact_type, len(text)
+            "artifact %s: claude returned non-JSON (len=%d, preview=%r)",
+            artifact_type,
+            len(text),
+            text[:240],
         )
         raise RuntimeError(f"claude did not return JSON for artifact {artifact_type}")
+
+    if parsed.get("error") == "insufficient context":
+        raise RuntimeError(
+            f"claude declined to generate {artifact_type}: {parsed.get('reason', '')}"
+        )
+
     return parsed

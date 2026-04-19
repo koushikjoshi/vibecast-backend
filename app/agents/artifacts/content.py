@@ -23,7 +23,8 @@ class _Base:
     spec: ArtifactSpec
     anthropic_schema: ClassVar[str] = ""
     anthropic_instructions: ClassVar[str] = ""
-    anthropic_max_tokens: ClassVar[int] = 2500
+    anthropic_max_tokens: ClassVar[int] = 4000
+    anthropic_thinking_budget: ClassVar[int] = 2000
 
     async def generate_anthropic(self, ctx: GenContext) -> dict:
         if not self.anthropic_schema:
@@ -41,6 +42,7 @@ class _Base:
                 anthropic_schema=self.anthropic_schema,
                 anthropic_instructions=self.anthropic_instructions,
                 max_tokens=self.anthropic_max_tokens,
+                thinking_budget=self.anthropic_thinking_budget,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
@@ -58,29 +60,57 @@ class BlogGenerator(_Base):
         title="Launch blog post (GEO-optimized)",
         description="Long-form launch blog structured for AI retrieval (GEO) and social sharing.",
     )
-    anthropic_max_tokens = 3200
+    anthropic_max_tokens = 5000
+    anthropic_thinking_budget = 3000
     anthropic_schema = (
         "{\n"
-        '  "headline": string (SEO title, 60-80 chars),\n'
-        '  "subhead": string (dek, 120-180 chars),\n'
-        '  "tldr": array of 3-5 string bullets for AI-retrieval summary,\n'
-        '  "sections": array of {"heading": string, "body": string} with 5-7 items,\n'
-        '  "faq": array of {"q": string, "a": string} with 3-5 items,\n'
-        '  "cta": {"label": string, "href": string},\n'
-        '  "geo_schema": {"@context": "https://schema.org", "@type": "Article", "headline": string, "description": string, "datePublished": string ISO date, "about": string},\n'
-        '  "voice_note": string (one line summarizing tone choices made)\n'
+        '  "headline": string (SEO title, 55-72 chars, front-loaded keyword),\n'
+        '  "subhead": string (dek, 140-190 chars, extends the headline\'s promise with a concrete mechanism),\n'
+        '  "tldr": array of 3-5 string bullets. Each bullet is a standalone fact Claude or ChatGPT could cite verbatim to answer "what is <product>?",\n'
+        '  "sections": array of 5-7 {"heading": string (phrased as a search-like query when possible, e.g. "How does X handle Y?"), "body": string (150-240 words of markdown, can include nested bullets)},\n'
+        '  "faq": array of 4-6 {"q": string (literal user-phrased question, includes product name), "a": string (60-110 words)},\n'
+        '  "cta": {"label": string (verb-first, <=32 chars), "href": string},\n'
+        '  "geo_schema": {"@context": "https://schema.org", "@type": "Article", "headline": string, "description": string, "datePublished": string ISO date YYYY-MM-DD, "about": string},\n'
+        '  "voice_note": string (one sentence explaining the specific voice choices you made for this post and why)\n'
         "}"
     )
     anthropic_instructions = (
-        "Write a long-form launch blog post optimized for Generative Engine "
-        "Optimization (GEO) — which means: lead with a crisp TL;DR, use "
-        "scannable section headings that match likely AI retrieval queries, "
-        "and include a FAQ section with literal question phrasings. Each "
-        "section body should be 80-160 words, concrete, and cite evidence "
-        "from the source material instead of abstract claims. Avoid hype "
-        "language. Avoid filler transitions. The post should read like a "
-        "credible launch announcement from a senior PMM, not a generic AI "
-        "output."
+        "This is the flagship launch post. It gets syndicated to the "
+        "homepage, shared on LinkedIn by the founder, and — crucially — "
+        "gets crawled by ChatGPT, Perplexity, Claude, and Gemini to "
+        "answer questions about the product. Structure accordingly.\n\n"
+        "# Structure\n"
+        "- Open with the TL;DR section (the `tldr` array). This is what "
+        "large language models will quote. Each bullet must be factual, "
+        "self-contained, and include the product name once.\n"
+        "- Lead section: 'Why we built this' or similar. Tell a real, "
+        "specific story from the founder's POV. One paragraph. No "
+        "abstraction.\n"
+        "- Middle sections: map one to each campaign pillar. Heading is "
+        "phrased as a search query users actually type ('How does X "
+        "handle Y?'). Body proves the claim with a mechanism, a "
+        "workflow description, or a concrete before/after.\n"
+        "- Penultimate section: 'What's not in this release' or 'What "
+        "we didn't build'. Honest trade-offs build trust and are rare in "
+        "AI-written copy — they're a strong differentiator.\n"
+        "- Final section: what happens next for readers who try it.\n\n"
+        "# Voice\n"
+        "- Sentences average 14-18 words. Vary rhythm. Break up long "
+        "paragraphs with a single short sentence for emphasis.\n"
+        "- First-person plural ('we') for the company. First-person "
+        "singular only in quoted founder speech.\n"
+        "- Never write 'In today's fast-paced world' or any variant.\n"
+        "- Never open a section with 'Let's dive in' or 'Let's explore'.\n\n"
+        "# FAQ section craft\n"
+        "The FAQ is not filler. It is the most-retrieved-by-AI section of "
+        "the post. Questions must be phrased exactly as a user would type "
+        "them into a search engine, including the product name when "
+        "natural. Answers are 60-110 words, start with a direct answer, "
+        "then give one mechanism and one example.\n\n"
+        "# GEO schema\n"
+        "`geo_schema.description` is what Google surfaces in AI overview. "
+        "It should be 150-160 chars, say what the product does in plain "
+        "mechanism terms, and include the product name once."
     )
 
     async def generate_mock(self, ctx: GenContext) -> dict:
@@ -197,25 +227,58 @@ class PressReleaseGenerator(_Base):
         title="Press release",
         description="AP-style press release for launch day.",
     )
-    anthropic_max_tokens = 1800
+    anthropic_max_tokens = 3500
+    anthropic_thinking_budget = 2000
     anthropic_schema = (
         "{\n"
-        '  "dateline": string (CITY, DATE format),\n'
-        '  "headline": string (press-release style, 70-90 chars),\n'
-        '  "body_paragraphs": array of 4-6 strings (300-500 chars each),\n'
-        '  "quote": string (a realistic-sounding quote from a named founder or exec, <= 280 chars),\n'
-        '  "boilerplate": string (2-3 sentence "About" block),\n'
+        '  "dateline": string ("CITY \u2014 Month D, YYYY" format, all caps city),\n'
+        '  "headline": string (75-95 chars, inverted-pyramid style, sentence case, no hype),\n'
+        '  "subheadline": string (120-160 chars that qualifies the headline with a specific mechanism or first adopter),\n'
+        '  "body_paragraphs": array of 5-7 strings. Paragraph 1 is the 5W lede (200-260 chars). Paragraphs 2-3 give mechanism / differentiation. Paragraphs 4-5 give customer context / market framing. Paragraph 6-7 are forward-looking and about availability/pricing.,\n'
+        '  "quote": string (single quote <= 260 chars, content-bearing, not cheerleading),\n'
+        '  "quote_attribution": string ("Name, Title, Company" \u2014 invent a plausible internal named exec),\n'
+        '  "second_quote": string (optional <= 240 chars quote from a customer, analyst, or partner; empty string if source material does not support one),\n'
+        '  "second_quote_attribution": string (empty if no second quote),\n'
+        '  "boilerplate": string (2-3 sentence "About [company]" block; concrete; no hype),\n'
         '  "contact": {"name": string, "email": string, "url": string},\n'
-        '  "disclaimer": string (safe-harbor / forward-looking statement)\n'
+        '  "disclaimer": string (safe-harbor / forward-looking statement, 1-3 sentences)\n'
         "}"
     )
     anthropic_instructions = (
-        "Write in AP-style press release format. Lead paragraph must answer "
-        "who/what/when/where/why. Body should include one quote from a "
-        "realistically-named internal executive (invent the name but keep it "
-        "plausible for the company). Avoid marketing hype — emulate the "
-        "voice of a serious enterprise press release. End with boilerplate "
-        "+ contact + safe-harbor disclaimer."
+        "Write in the voice of a serious AP-style business press release "
+        "that a wire service (Business Wire, PR Newswire) would actually "
+        "distribute. This is NOT a marketing post. It is a news document.\n\n"
+        "# Inverted-pyramid structure\n"
+        "- Lede paragraph (first): who/what/when/where/why. One sentence, "
+        "maybe two. Every noun is concrete.\n"
+        "- Second paragraph: the mechanism. How does the product actually "
+        "work? Two sentences.\n"
+        "- Third paragraph: the problem it solves in the market today, "
+        "with one specific pain point from the source material.\n"
+        "- Fourth paragraph: quote from the named exec. The quote must "
+        "make a content-bearing claim, not say 'we're excited'.\n"
+        "- Fifth paragraph: differentiation vs. existing approaches. Name "
+        "categories, not competitors (e.g. 'generative writing tools' "
+        "rather than naming Jasper), unless the brand policy allows it.\n"
+        "- Sixth paragraph: availability, pricing tier, geographic scope. "
+        "If source material does not provide these, write 'Generally "
+        "available starting <launch_date>. Pricing details at <website>.'\n"
+        "- Seventh paragraph (optional): second quote from a customer or "
+        "analyst. Only include if source material supports it. Leave the "
+        "`second_quote` keys empty strings otherwise.\n\n"
+        "# Voice\n"
+        "- Third person. Past tense for the announcement ('announced "
+        "today'), present tense for product descriptions.\n"
+        "- No adjectives unless they carry information ('38% faster' yes; "
+        "'powerful' no).\n"
+        "- No phrases like 'we are thrilled to announce'. A wire service "
+        "would cut that.\n"
+        "- Quotes must sound like the person actually speaking, not like "
+        "marketing copy. Use contractions. Use cadence.\n\n"
+        "# Quote test\n"
+        "Before finalizing a quote, ask: 'Would this quote make sense "
+        "attributed to a different company's exec?' If yes, rewrite it "
+        "until the answer is no."
     )
 
     async def generate_mock(self, ctx: GenContext) -> dict:
@@ -256,8 +319,16 @@ class PressReleaseGenerator(_Base):
         return {
             "dateline": dateline,
             "headline": headline,
+            "subheadline": (
+                f"{project.name} pairs a CMO-style orchestrator with specialist "
+                "research, content, social, and podcast agents to ship a full "
+                "launch kit on a single brief."
+            ),
             "body_paragraphs": body,
             "quote": pillar_quote_source,
+            "quote_attribution": f"Founding team, {project.name}",
+            "second_quote": "",
+            "second_quote_attribution": "",
             "boilerplate": boilerplate,
             "contact": contact,
             "disclaimer": (
@@ -274,20 +345,45 @@ class ReleaseNotesGenerator(_Base):
         title="Release notes entry",
         description="Changelog-style release notes for your product site.",
     )
-    anthropic_max_tokens = 1200
+    anthropic_max_tokens = 2000
+    anthropic_thinking_budget = 1200
     anthropic_schema = (
         "{\n"
-        '  "version": string (semver or date),\n'
-        '  "summary": string (one-line summary of the release),\n'
-        '  "bullets": array of 4-8 strings, each prefixed with [New]/[Improved]/[Fixed],\n'
-        '  "upgrade_notes": array of 1-3 strings,\n'
-        '  "compatibility": string (one-line compatibility note)\n'
+        '  "version": string (semver like "1.4.0" or ISO date),\n'
+        '  "release_name": string (short codename or release theme, 2-4 words, empty string if none),\n'
+        '  "summary": string (one-line TL;DR of the release, <= 140 chars),\n'
+        '  "highlights": array of 2-3 {"title": string, "body": string (2-3 sentences describing one flagship change, mechanism first)},\n'
+        '  "bullets": array of 5-10 strings. Each begins with one of [New]/[Improved]/[Fixed]/[Changed]/[Deprecated]. Verb-first ("Added...", "Cut..."). Specific noun. No vague marketing verbs.,\n'
+        '  "upgrade_notes": array of 1-3 strings describing any breaking changes or required actions. Empty array if none.,\n'
+        '  "compatibility": string (one-line note on OS / version / integration requirements),\n'
+        '  "credits": string (optional line thanking named contributors; empty string if source material does not support it)\n'
         "}"
     )
     anthropic_instructions = (
-        "Produce a product-changelog entry in the style of a mature B2B SaaS "
-        "(think Linear or Stripe). Bullets should be concrete and verb-first. "
-        "Do not invent features that aren't in the source material."
+        "Write in the style of the best product changelogs on the "
+        "internet — Linear, Stripe, Vercel, GitHub. The reader is a "
+        "technical user who wants to know, in 30 seconds, what changed "
+        "and whether they need to do anything about it.\n\n"
+        "# Craft rules for bullets\n"
+        "- Verb-first: 'Added', 'Cut', 'Rewrote', 'Fixed', 'Replaced'. "
+        "Not 'We have added'.\n"
+        "- Specific noun: '...SSO via Okta' not '...improved authentication'.\n"
+        "- Include the interaction surface when relevant: 'on the billing "
+        "page', 'in the CLI', 'in the embeddable widget'.\n"
+        "- Numbers when truthful: 'cut p95 latency from 420ms to 180ms'.\n"
+        "- One idea per bullet.\n\n"
+        "# Highlights\n"
+        "Highlights are the 2-3 bullets that deserve their own story. "
+        "Each highlight is a mini-blog paragraph: open with the mechanism, "
+        "then describe the user-visible effect, then mention any caveat.\n\n"
+        "# Upgrade notes\n"
+        "If the source material does not describe any breaking changes, "
+        "leave `upgrade_notes` as an empty array. Do not manufacture "
+        "fake migration steps.\n\n"
+        "# Never\n"
+        "- 'We're excited to announce...'\n"
+        "- 'A better experience for our users'\n"
+        "- 'Various improvements and bug fixes' (always be specific)"
     )
 
     async def generate_mock(self, ctx: GenContext) -> dict:
@@ -316,8 +412,21 @@ class ReleaseNotesGenerator(_Base):
 
         return {
             "version": f"{launch_date(ctx)}",
+            "release_name": "",
             "summary": summary,
+            "highlights": [
+                {
+                    "title": "Agentic launch pipeline",
+                    "body": (
+                        "A CMO orchestrator dispatches research, strategy, "
+                        "content, social, lifecycle, and podcast agents on "
+                        "every launch brief. Each artifact passes through "
+                        "Brand Guardian before it reaches the approval queue."
+                    ),
+                }
+            ],
             "bullets": bullets,
             "upgrade_notes": upgrade_notes,
             "compatibility": compat,
+            "credits": "",
         }

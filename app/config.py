@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,49 +16,40 @@ class Settings(BaseSettings):
     env: str = "development"
     port: int = 8000
     log_level: str = "INFO"
-    cors_origins: str = "http://localhost:3000"
-    internal_api_key: str = "dev-insecure-key"
+
     public_backend_url: str = "http://localhost:8000"
     public_frontend_url: str = "http://localhost:3000"
+    cors_origins: str = "http://localhost:3000"
 
-    openai_api_key: str | None = None
+    jwt_secret: str = "dev-insecure-change-me-in-prod"
+    session_cookie_name: str = "vibecast_session"
+    session_max_age_days: int = 30
+    magic_link_ttl_min: int = 30
+    magic_link_dev_log: bool = True
+
+    internal_api_key: str = "dev-insecure-key"
+
     anthropic_api_key: str | None = None
-
-    model_editor: str = "gpt-4o-mini"
-    model_researcher: str = "gpt-4o-mini"
-    model_booker: str = "gpt-4o-mini"
-    model_host: str = "gpt-4o"
-    model_engineer: str = "gpt-4o-mini"
-    model_publisher: str = "gpt-4o-mini"
-
+    openai_api_key: str | None = None
     elevenlabs_api_key: str | None = None
-    openai_tts_voice_fallback: str = "alloy"
-
     firecrawl_api_key: str | None = None
-    tavily_api_key: str | None = None
 
     db_path: str = "./data/vibecast.db"
-    media_dir: str = "./public/media"
+    projects_dir: str = "./data/projects"
+    media_dir: str = "./data/media"
 
-    s3_endpoint_url: str | None = None
-    s3_bucket: str | None = None
-    s3_region: str | None = None
-    s3_access_key_id: str | None = None
-    s3_secret_access_key: str | None = None
-    s3_public_base_url: str | None = None
+    daily_cost_cap_usd: float = 20.0
+    project_cost_cap_usd: float = 15.0
 
-    slack_webhook_url: str | None = None
-    cost_alert_usd: float = 2.00
-
-    sanity_project_id: str | None = None
-    sanity_dataset: str = "production"
-    sanity_api_version: str = "2024-01-01"
-    sanity_read_token: str | None = None
-    sanity_write_token: str | None = None
+    disable_live_runs: bool = False
 
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def database_url(self) -> str:
+        return f"sqlite:///{self.db_path}"
 
 
 @lru_cache(maxsize=1)

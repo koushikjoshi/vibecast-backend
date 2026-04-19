@@ -7,7 +7,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routes import episodes, feed, health, hosts, runs, traces
+from app.db import init_db
+from app.routes import auth as auth_routes
+from app.routes import health as health_routes
+from app.routes import workspaces as workspace_routes
 
 logger = logging.getLogger("vibecast")
 
@@ -17,6 +20,8 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     logging.basicConfig(level=settings.log_level.upper())
     logger.info("VibeCast backend starting in %s mode", settings.env)
+    init_db()
+    logger.info("Database initialized at %s", settings.db_path)
     yield
     logger.info("VibeCast backend shutting down")
 
@@ -25,8 +30,8 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
         title="VibeCast API",
-        version="0.1.0",
-        description="Newsroom-as-a-service backend.",
+        version="0.2.0",
+        description="AI marketing team for B2B startups — multi-agent, workspace-native.",
         lifespan=lifespan,
     )
 
@@ -38,12 +43,9 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    app.include_router(health.router)
-    app.include_router(episodes.router, prefix="/api/episodes", tags=["episodes"])
-    app.include_router(runs.router, prefix="/api/runs", tags=["runs"])
-    app.include_router(hosts.router, prefix="/api/hosts", tags=["hosts"])
-    app.include_router(traces.router, prefix="/api/traces", tags=["traces"])
-    app.include_router(feed.router, tags=["feed"])
+    app.include_router(health_routes.router)
+    app.include_router(auth_routes.router)
+    app.include_router(workspace_routes.router)
 
     return app
 
